@@ -149,17 +149,17 @@ def load_data(filename, flag='train'):
     if flag == 'test':
         with open(filename, 'r') as fp:
             for record in csv.DictReader(fp,delimiter = '\t'):
-                sent = record['abstract'].lower().strip()
+                sent = record['sentence'].lower().strip()
                 sent_id = record['id'].lower().strip()
                 data.append((sent,sent_id))
     else:
         with open(filename, 'r') as fp:
             for record in csv.DictReader(fp,delimiter = '\t'):
-                sent = record['abstract'].lower().strip()
+                sent = record['sentence'].lower().strip()
                 sent_id = record['id'].lower().strip()
                 # label = int(record['citations'].strip())
                 # label = np.log(float(record['citations'].strip())*1.0)
-                label = int(record['citations'].strip())
+                label = int(record['sentiment'].strip())
                 if label not in num_labels:
                     num_labels[label] = len(num_labels)
                 data.append((sent, label,sent_id))
@@ -399,9 +399,9 @@ if __name__ == "__main__":
         epochs=args.epochs,
         batch_size=args.batch_size,
         hidden_dropout_prob=args.hidden_dropout_prob,
-        train='data/arxiv_data_ftsv.tsv',
-        dev='data/arxiv_data_ftsv.tsv',
-        test='data/arxiv_data_ftsv.tsv',
+        train='data/ids-sst-train.csv',
+        dev='data/ids-sst-dev.csv',
+        test='data/ids-sst-train.csv',
         fine_tune_mode=args.fine_tune_mode,
         dev_out = 'predictions/' + args.fine_tune_mode + '-arxiv-dev-out.csv',
         test_out = 'predictions/' + args.fine_tune_mode + '-arxiv-test-out.csv'
