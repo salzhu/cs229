@@ -189,9 +189,9 @@ def model_eval(dataloader, model, device):
         b_mask = b_mask.to(device)
 
         logits = model(b_ids, b_mask)
-        logits = logits.flatten().detach().numpy()
+        logits = logits.detach().flatten().cpu().numpy()
 
-        b_labels = b_labels.flatten().detach().numpy()
+        b_labels = b_labels.detach().flatten().cpu().numpy()
         y_pred.extend(np.array(logits))
         y_true.extend(np.array(b_labels))
         sents.extend(b_sents)
@@ -223,7 +223,7 @@ def model_test_eval(dataloader, model, device):
         b_mask = b_mask.to(device)
 
         logits = model(b_ids, b_mask)
-        logits = logits.detach().cpu().numpy()
+        logits = logits.detach().flatten().cpu().numpy()
 
         y_pred.extend(logits)
         sents.extend(b_sents)
@@ -258,7 +258,7 @@ def train(args):
     train_data, num_labels = load_data(args.train, 'train')
     dev_data = load_data(args.dev, 'valid')
 
-    train_data = train_data[:10000]
+    train_data = train_data[:100]
     dev_data = dev_data[10000:10000+100]
 
     train_dataset = CitationDataset(train_data, args)
