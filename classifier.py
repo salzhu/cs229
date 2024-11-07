@@ -51,7 +51,8 @@ class BertCitationClassifier(torch.nn.Module):
         # Create any instance variables you need to classify the sentiment of BERT embeddings.
         ### TODO
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.classifier = nn.Linear(config.hidden_size, self.num_labels) ## AK TODO make dynamic
+        # self.classifier = nn.Linear(config.hidden_size, self.num_labels) ## AK TODO make dynamic
+        self.classifier = nn.Linear(config.hidden_size, 1)
     
 
 
@@ -70,7 +71,6 @@ class BertCitationClassifier(torch.nn.Module):
 
         return output
         raise NotImplementedError
-
 
 
 class CitationDataset(Dataset):
@@ -93,7 +93,7 @@ class CitationDataset(Dataset):
         encoding = self.tokenizer(sents, return_tensors='pt', padding=True, truncation=True)
         token_ids = torch.LongTensor(encoding['input_ids'])
         attention_mask = torch.LongTensor(encoding['attention_mask'])
-        labels = torch.LongTensor(labels)
+        labels = torch.DoubleTensor(labels)
 
         return token_ids, attention_mask, labels, sents, sent_ids
 
@@ -161,7 +161,8 @@ def load_data(filename, flag='train'):
             for record in csv.DictReader(fp,delimiter = '\t'):
                 sent = record['abstract'].lower().strip()
                 sent_id = record['id'].lower().strip()
-                label = int(record['citations'].strip())
+                # label = int(record['citations'].strip())
+                label = np.log(float(record['citations'].strip())*1.0)
                 if label not in num_labels:
                     num_labels[label] = len(num_labels)
                 data.append((sent, label,sent_id))
@@ -182,25 +183,30 @@ def model_eval(dataloader, model, device):
     sent_ids = []
     for step, batch in enumerate(tqdm(dataloader, desc=f'eval', disable=TQDM_DISABLE)):
         b_ids, b_mask, b_labels, b_sents, b_sent_ids = batch['token_ids'],batch['attention_mask'],  \
-                                                        batch['labels'], batch['sents'], batch['sent_ids']
+                                                        batch['labels'], batch['abstracts'], batch['paper_ids']
 
         b_ids = b_ids.to(device)
         b_mask = b_mask.to(device)
 
         logits = model(b_ids, b_mask)
-        logits = logits.detach().cpu().numpy()
-        preds = np.argmax(logits, axis=1).flatten()
+        logits = logits.flatten().detach().numpy()
 
-        b_labels = b_labels.flatten()
-        y_true.extend(b_labels)
-        y_pred.extend(preds)
+        b_labels = b_labels.flatten().detach().numpy()
+        y_pred.extend(np.array(logits))
+        y_true.extend(np.array(b_labels))
         sents.extend(b_sents)
         sent_ids.extend(b_sent_ids)
+    
+    print(y_pred, y_true)
+    pearson_mat = np.corrcoef(y_pred,y_true)
+    sts_corr = pearson_mat[1][0]
 
-    f1 = f1_score(y_true, y_pred, average='macro')
-    acc = accuracy_score(y_true, y_pred)
+    # f1 = f1_score(y_true, y_pred, average='macro')
+    # acc = accuracy_score(y_true, y_pred)
 
-    return acc, f1, y_pred, y_true, sents, sent_ids
+    # return acc, f1, y_pred, y_true, sents, sent_ids
+
+    return sts_corr, y_pred, sent_ids
 
 
 # Evaluate the model on test examples.
@@ -218,13 +224,17 @@ def model_test_eval(dataloader, model, device):
 
         logits = model(b_ids, b_mask)
         logits = logits.detach().cpu().numpy()
-        preds = np.argmax(logits, axis=1).flatten()
 
-        y_pred.extend(preds)
+        y_pred.extend(logits)
         sents.extend(b_sents)
         sent_ids.extend(b_sent_ids)
 
-    return y_pred, sents, sent_ids
+    # f1 = f1_score(y_true, y_pred, average='macro')
+    # acc = accuracy_score(y_true, y_pred)
+
+    # return acc, f1, y_pred, y_true, sents, sent_ids
+
+    return y_pred, sent_ids
 
 
 def save_model(model, optimizer, args, config, filepath):
@@ -247,6 +257,9 @@ def train(args):
     # Create the data and its corresponding datasets and dataloader.
     train_data, num_labels = load_data(args.train, 'train')
     dev_data = load_data(args.dev, 'valid')
+
+    train_data = train_data[:10000]
+    dev_data = dev_data[10000:10000+100]
 
     train_dataset = CitationDataset(train_data, args)
     dev_dataset = CitationDataset(dev_data, args)
@@ -287,7 +300,8 @@ def train(args):
 
             optimizer.zero_grad()
             logits = model(b_ids, b_mask)
-            loss = F.cross_entropy(logits, b_labels.view(-1), reduction='sum') / args.batch_size
+            # loss = F.cross_entropy(logits, b_labels.view(-1), reduction='sum') / args.batch_size
+            loss = F.mse_loss(logits.flatten().float(), b_labels.flatten().float()) / args.batch_size
 
             loss.backward()
             optimizer.step()
@@ -297,14 +311,14 @@ def train(args):
 
         train_loss = train_loss / (num_batches)
 
-        train_acc, train_f1, *_  = model_eval(train_dataloader, model, device)
-        dev_acc, dev_f1, *_ = model_eval(dev_dataloader, model, device)
+        train_corr, train_f1, *_  = model_eval(train_dataloader, model, device)
+        dev_corr, dev_f1, *_ = model_eval(dev_dataloader, model, device)
 
-        if dev_acc > best_dev_acc:
-            best_dev_acc = dev_acc
+        if dev_corr > best_dev_acc:
+            best_dev_acc = dev_corr
             save_model(model, optimizer, args, config, args.filepath)
 
-        print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train acc :: {train_acc :.3f}, dev acc :: {dev_acc :.3f}")
+        print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train corr :: {train_corr :.3f}, dev corr :: {dev_corr :.3f}")
 
 
 def test(args):
@@ -318,10 +332,12 @@ def test(args):
         print(f"load model from {args.filepath}")
         
         dev_data = load_data(args.dev, 'valid')
+        dev_data = dev_data[:20]
         dev_dataset = CitationDataset(dev_data, args)
         dev_dataloader = DataLoader(dev_dataset, shuffle=False, batch_size=args.batch_size, collate_fn=dev_dataset.collate_fn)
 
         test_data = load_data(args.test, 'test')
+        test_data = test_data[:20]
         test_dataset = CitationTestDataset(test_data, args)
         test_dataloader = DataLoader(test_dataset, shuffle=False, batch_size=args.batch_size, collate_fn=test_dataset.collate_fn)
         
@@ -347,7 +363,7 @@ def get_args():
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--fine-tune-mode", type=str,
                         help='last-linear-layer: the BERT parameters are frozen and the task specific head parameters are updated; full-model: BERT parameters are updated as well',
-                        choices=('last-linear-layer', 'full-model'), default="last-linear-layer")
+                        choices=('last-linear-layer', 'full-model'), default="full-model")
     parser.add_argument("--use_gpu", action='store_true')
 
     parser.add_argument("--batch_size", help='sst: 64, cfimdb: 8 can fit a 12GB GPU', type=int, default=8)
@@ -371,9 +387,9 @@ if __name__ == "__main__":
         epochs=args.epochs,
         batch_size=args.batch_size,
         hidden_dropout_prob=args.hidden_dropout_prob,
-        train='data/ids-arxiv-train.csv',
-        dev='data/ids-arxiv-train.csv',
-        test='data/ids-arxiv-train.csv',
+        train='data/arxiv_data_ftsv.tsv',
+        dev='data/arxiv_data_ftsv.tsv',
+        test='data/arxiv_data_ftsv.tsv',
         fine_tune_mode=args.fine_tune_mode,
         dev_out = 'predictions/' + args.fine_tune_mode + '-arxiv-dev-out.csv',
         test_out = 'predictions/' + args.fine_tune_mode + '-arxiv-test-out.csv'
